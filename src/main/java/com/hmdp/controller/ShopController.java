@@ -6,7 +6,11 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
 import com.hmdp.service.IShopService;
+import com.hmdp.utils.RedisConstants;
 import com.hmdp.utils.SystemConstants;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.bind.annotation.*;
 
 import javax.annotation.Resource;
@@ -21,10 +25,13 @@ import javax.annotation.Resource;
  */
 @RestController
 @RequestMapping("/shop")
+@Slf4j
 public class ShopController {
 
     @Resource
     public IShopService shopService;
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
 
     /**
      * 根据id查询商铺信息
@@ -33,7 +40,8 @@ public class ShopController {
      */
     @GetMapping("/{id}")
     public Result queryShopById(@PathVariable("id") Long id) {
-        return Result.ok(shopService.getById(id));
+        log.info("根据 id 查询商铺信息：{}",id);
+        return shopService.queryById(id);
     }
 
     /**
@@ -57,7 +65,16 @@ public class ShopController {
     @PutMapping
     public Result updateShop(@RequestBody Shop shop) {
         // 写入数据库
+
+        Long shopId = shop.getId();
+        // 判断 id 是否为空
+        if (shopId == null){
+            Result.fail("商铺 id 不能为空！");
+        }
+        // 更新数据库
         shopService.updateById(shop);
+        // 删除缓存
+        stringRedisTemplate.delete(RedisConstants.CACHE_SHOP_KEY);
         return Result.ok();
     }
 
