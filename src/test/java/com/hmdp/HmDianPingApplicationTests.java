@@ -22,10 +22,10 @@ class HmDianPingApplicationTests {
     @Autowired
     private CacheClient cacheClient;
 
-    @Test
-    void testSaveShop() throws InterruptedException {
-        shopService.saveShop2Redis(1L,60L);
-    }
+//    @Test
+//    void testSaveShop() throws InterruptedException {
+//        shopService.saveShop2Redis(1L,60L);
+//    }
 
     @Test
     void testSaveShopCacheClient() throws InterruptedException {
