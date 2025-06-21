@@ -2,6 +2,7 @@ package com.hmdp.service.impl;
 
 import com.baomidou.mybatisplus.extension.conditions.query.QueryChainWrapper;
 import com.hmdp.dto.Result;
+import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.SeckillVoucher;
 import com.hmdp.entity.VoucherOrder;
 import com.hmdp.mapper.VoucherOrderMapper;
@@ -9,13 +10,21 @@ import com.hmdp.service.ISeckillVoucherService;
 import com.hmdp.service.IVoucherOrderService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.RedisWorker;
+import com.hmdp.utils.SimpleRedisLock;
 import com.hmdp.utils.UserHolder;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.aop.framework.AopContext;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
+import java.util.Collections;
 
 /**
  * <p>
@@ -34,6 +43,20 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
     @Autowired
     private RedisWorker redisWorker;
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+
+    @Autowired
+    private RedissonClient redissonClient;
+
+    private static final DefaultRedisScript<Long> SECKILL_SCRIPT;
+    static {
+        SECKILL_SCRIPT = new DefaultRedisScript<>();
+        SECKILL_SCRIPT.setLocation(new ClassPathResource("seckill.lua"));
+        SECKILL_SCRIPT.setResultType(Long.class);
+    }
+
+
 
 
     /**
@@ -41,7 +64,36 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
      * @param voucherId
      * @return
      */
+    // 使用 lua 脚本
     @Override
+    public Result seckillVoucher(Long voucherId) {
+
+        // 1、获取用户
+        Long userId = UserHolder.getUser().getId();
+        Long orderId = redisWorker.nextId("order");
+
+        // 2、执行 lua 脚本
+        Long result = stringRedisTemplate.execute(
+                SECKILL_SCRIPT,
+                Collections.emptyList(),
+                voucherId.toString(), userId.toString(), String.valueOf(orderId));
+        int r = result.intValue();
+
+        // 3、判断结果是否为 0
+        if (r != 0){
+            // 3.1、不为0，代表没有购买资格
+            return Result.fail(r == 1 ? "库存不足" : "不能重复下单");
+        }
+
+        //TODO 保存阻塞队列
+
+        // 4、返回订单id
+        return Result.ok(orderId);
+    }
+
+
+    // 不使用 lua 脚本
+    /*    @Override
     public Result seckillVoucher(Long voucherId) {
 
         // 1、查询优惠券信息
@@ -66,16 +118,41 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         // 获取用户id
         Long userId = UserHolder.getUser().getId();
 //        Long userId = 10L;
+
+
+        // 分布式锁
+        // 创建锁对象
+//        SimpleRedisLock lock = new SimpleRedisLock("order:" + userId, stringRedisTemplate);
+        RLock lock = redissonClient.getLock("lock:order:" + userId);
+        // 获取锁对象
+        boolean isLock = lock.tryLock();
+        // 加锁失败
+        if (!isLock){
+            return Result.fail("不允许重复！");
+        }
+
+        try {
+            // 获取代理对象（保证事务生效）
+            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+            return proxy.createVoucherOrder(voucherId);
+        } finally {
+            // 释放锁
+            lock.unlock();
+        }
+
+
+
         // 一人一单 + 下单
         // 按用户id加锁：先获取锁，再提交事务，最后释放锁，才可以保证线程安全
         // intern 确保 userId.toString() 字符串在JVM中是全局唯一的。
         // 确保 多个线程对 同一个userId 加锁时，使用的是同一个锁对象
-        synchronized (userId.toString().intern()){
-            // 获取代理对象（保证事务生效）
-            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
-            return proxy.createVoucherOrder(voucherId);
-        }
-    }
+//        synchronized (userId.toString().intern()){
+//            // 获取代理对象（保证事务生效）
+//            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+//            return proxy.createVoucherOrder(voucherId);
+//        }
+
+    }*/
 
 
     /**
